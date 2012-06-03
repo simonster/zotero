@@ -238,16 +238,58 @@ Zotero_RecognizePDF.Recognizer = function () {}
  *	(function will be passed image as URL and must return text of CAPTCHA)
  */
 Zotero_RecognizePDF.Recognizer.prototype.recognize = function(file, libraryID, callback, captchaCallback) {
-	const MAX_PAGES = 3;
-	
 	const lineRe = /^\s*([^\s]+(?: [^\s]+)+)/;
 	
 	this._libraryID = libraryID;
 	this._callback = callback;
 	//this._captchaCallback = captchaCallback;
 	
+	
 	var me = this;
-	Zotero.Fulltext.pdfToText(file, MAX_PAGES).then(function(response) {
+	Zotero.PDF.getMetadata(file).then(function(metadata) {
+		Zotero.debug("Parsed RDF from PDF");
+		Zotero.debug(metadata);
+		var shouldUse = metadata && metadata.title && metadata.date && metadata.creators.length;
+		if(shouldUse) {
+			switch(metadata.itemType) {
+				case "journalArticle":
+					shouldUse = metadata.itemType === "journalArticle"
+						&& metadata.publicationTitle && metadata.volume && metadata.pages;
+					break;
+				case "book":
+					shouldUse = metadata.itemType === "book"
+						&& metadata.publisher;
+					break;
+			}
+		}
+			
+		if(shouldUse) {
+			var itemSaver = new Zotero.Translate.ItemSaver(libraryID, 0);
+			itemSaver.saveItems([metadata], function(success, items) {
+				if(success) {
+					me._callback(items[0]);
+				} else {
+					me._callback(false, "recognizePDF.unexpectedError");
+				}
+			});
+		} else {
+			if(metadata.DOI) me._DOI = metadata.DOI;
+			me._loadText(file);
+		}
+	}).fail(function(err) {
+		Zotero.logError(err);
+		me._loadText(file);
+	});
+}
+
+/**
+ * Loads text out of the PDF and looks for a DOI or queries Google
+ */
+Zotero_RecognizePDF.Recognizer.prototype._loadText = function(file) {
+	const MAX_PAGES = 3;
+	
+	var me = this;
+	Zotero.PDF.pdfToText(file, MAX_PAGES).then(function(response) {
 		var text = response.text;
 		var lines = text.split("\n");
 		var lineLengths = [line.length for(line in lines)];
@@ -255,7 +297,7 @@ Zotero_RecognizePDF.Recognizer.prototype.recognize = function(file, libraryID, c
 		// look for DOI
 		Zotero.debug(text);
 		var m = Zotero.Utilities.cleanDOI(text);
-		if(m) {
+		if(m && !me._DOI) {
 			me._DOI = m[0];
 		}
 		
@@ -283,7 +325,7 @@ Zotero_RecognizePDF.Recognizer.prototype.recognize = function(file, libraryID, c
 			me._startLine = me._iteration = 0;
 			me._queryGoogle();
 		}
-	}, function(err) {
+	}).fail(function(err) {
 		me._callback(false, "recognizePDF.couldNotRead");
 		throw err;
 	});

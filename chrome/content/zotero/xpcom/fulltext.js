@@ -42,7 +42,6 @@ Zotero.Fulltext = new function(){
 	this.findTextInItems = findTextInItems;
 	this.clearItemWords = clearItemWords;
 	this.getPages = getPages;
-	this.getTotalPagesFromFile = getTotalPagesFromFile;
 	this.getChars = getChars;
 	this.getTotalCharsFromFile = getTotalCharsFromFile;
 	this.setChars = setChars;
@@ -65,88 +64,8 @@ Zotero.Fulltext = new function(){
 	this.__defineGetter__("INDEX_STATE_INDEXED", function () { return 3; });
 	
 	var self = this;
-	var _pdfjsWindow;
 	
 	function init() {}
-	
-	/**
-	 * Gets an instance of PDFJS
-	 */
-	this.getPDFJSWindow = function() {
-		if(_pdfjsWindow) {
-			return Q.fcall(function() {
-				return _pdfjsWindow;
-			});
-		} else {
-			var deferred = Q.defer();
-			
-			// Get file:/// URI for pdf.js
-			var uri = Services.io.newURI("chrome://zotero/content/pdfjs/container.html", null, null);
-			uri = Components.classes["@mozilla.org/chrome/chrome-registry;1"]
-					.getService(Components.interfaces.nsIChromeRegistry).convertChromeURL(uri);
-			
-			// Load pdf.js in a new hidden browser
-			var browser = Zotero.Browser.createHiddenBrowser();
-			var listener = function(event) {
-				if(browser.contentDocument.documentURI === "about:blank") return;
-				browser.removeEventListener("DOMContentLoaded", listener, false);
-				_pdfjsWindow = browser.contentWindow;
-				deferred.resolve(_pdfjsWindow);
-			};
-			browser.addEventListener("DOMContentLoaded", listener, false);
-			browser.loadURI(uri.path);
-			Zotero.addShutdownListener(function() {
-				Zotero.Browser.deleteHiddenBrowser(browser);
-			});
-			
-			return deferred.promise;
-		}
-	};
-	
-	/**
-	 * Converts a PDF to a text string
-	 * @param {nsIFile} file
-	 * @param {Integer} maxPages The maximum number of pages to convert, or omitted to
-	 *     convert all pages
-	 * @return {Promise} A promise that resolves with an object in the form
-	 *     {"text":<<PDF TEXT CONTENT>>, "pagesConverted":<<NUMBER OF PAGES CONVERTED>>,
-	 *      "pagesTotal":<<TOTAL NUMBER OF PAGES IN PDF>>}
-	 */
-	this.pdfToText = function(file, maxPages) {
-		// I wish there was a way to do this asynchronously and get a typed array out,
-		// but I don't think there is. This is going to take 3x as much memory as the size 
-		// of the PDF, so let's hope the PDF is small or the user has lots of RAM.
-		var binaryString = Zotero.File.getBinaryContents(file);
-		var binaryArray = new Uint8Array(binaryString.length);
-		for(var i=0; i<binaryString.length; i++) {
-			binaryArray[i] = binaryString.charCodeAt(i);
-		}
-		binaryString = null;
-		
-		return this.getPDFJSWindow().then(function(pdfjsWindow) {
-			var deferred = Q.defer(), listener = function(event) {
-				var message = event.data;
-				if(typeof message !== "object"
-					|| message.name !== "Zotero.pdfToText.response") return;
-				
-				pdfjsWindow.removeEventListener("message", listener, false);
-				
-				if(message.error) {
-					deferred.reject(message.error);
-				} else {
-					deferred.resolve(message.response);
-				}
-			};
-			pdfjsWindow.addEventListener("message", listener, false);
-			pdfjsWindow.postMessage({
-				"name":"Zotero.pdfToText",
-				"pdf":binaryArray,
-				"maxPages":maxPages
-			}, "*");
-			
-			return deferred.promise;
-		});
-	}
 	
 	/*
 	 * Returns true if MIME type is converted to text and cached before indexing
@@ -159,7 +78,6 @@ Zotero.Fulltext = new function(){
 		}
 		return false;
 	}
-	
 	
 	/*
 	 * Index multiple words at once
@@ -370,8 +288,7 @@ Zotero.Fulltext = new function(){
 	
 	
 	/*
-	 * Run PDF through pdfinfo and pdftotext to generate .zotero-ft-info
-	 * and .zotero-ft-cache, and pass the text file back to indexFile()
+	 * Run PDF through pdf.js and pass the string back to indexString()
 	 *
 	 * @param	 allPages	 If true, index all pages rather than pdfMaxPages
 	 */
@@ -381,7 +298,7 @@ Zotero.Fulltext = new function(){
 			return false;
 		}
 		
-		return this.pdfToText(file, allPages ? null : maxPages).then(function(response) {		
+		return Zotero.PDF.pdfToText(file, allPages ? null : maxPages).then(function(response) {		
 			Zotero.DB.beginTransaction();
 			this.indexString(response.text, 'utf-8', itemID);
 			this.setPages(itemID, { indexed: response.pagesConverted,
@@ -588,28 +505,6 @@ Zotero.Fulltext = new function(){
 		var sql = "SELECT indexedPages, totalPages AS total "
 			+ "FROM fulltextItems WHERE itemID=?";
 		return Zotero.DB.rowQuery(sql, itemID);
-	}
-	
-	
-	/*
-	 * Gets the number of pages from the PDF info cache file
-	 */
-	function getTotalPagesFromFile(itemID) {
-		var file = Zotero.Attachments.getStorageDirectory(itemID);
-		file.append(this.pdfInfoCacheFile);
-		if (!file.exists()) {
-			return false;
-		}
-		var contents = Zotero.File.getContents(file);
-		try {
-			// Parse pdfinfo output
-			var pages = contents.match('Pages:[^0-9]+([0-9]+)')[1];
-		}
-		catch (e) {
-			Zotero.debug(e);
-			return false;
-		}
-		return pages;
 	}
 	
 	

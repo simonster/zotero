@@ -28,15 +28,23 @@ PDFJS.workerSrc = 'pdf.js';
 window.addEventListener("message", function(event) {
 	var message = event.data;
 	if(typeof message !== "object") return;
+
+	var errHandler = function(err) {
+		window.postMessage({
+			"name":message.name+".response",
+			"error":err.toString()
+		}, "*");
+	};
 	
-	if(message.name === "Zotero.pdfToText") {
+	var respond = function(response) {
+		window.postMessage({
+			"name":message.name+".response",
+			"response":response
+		}, "*");
+	}
+	
+	if(message.name === "Zotero.PDF.pdfToText") {
 		var maxPages = message.maxPages;
-		var errHandler = function(err) {
-			window.postMessage({
-				"name":"Zotero.pdfToText.response",
-				"error":err.toString()
-			}, "*");
-		};
 		
 		PDFJS.getDocument(message.pdf).then(function(pdf) {
 			try {
@@ -50,14 +58,11 @@ window.addEventListener("message", function(event) {
 							try {
 								contents[i] = textContent;
 								if(++retrieved === nPages) {
-									window.postMessage({
-										"name":"Zotero.pdfToText.response",
-										"response":{
-											"text":contents.join("\n"),
-											"pagesConverted":nPages,
-											"pagesTotal":pdf.numPages
-										}
-									}, "*");
+									respond({
+										"text":contents.join("\n"),
+										"pagesConverted":nPages,
+										"pagesTotal":pdf.numPages
+									});
 								}
 							} catch(e) {
 								errHandler(e);
@@ -69,5 +74,9 @@ window.addEventListener("message", function(event) {
 				errHandler(e);
 			}
 		}, errHandler);
+	} else if(message.name === "Zotero.PDF.getMetadata") {
+		PDFJS.getDocument(message.pdf).then(function(pdf) {
+			respond(pdf.pdfInfo.metadata);
+		});
 	}
 }, false);

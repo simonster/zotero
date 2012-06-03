@@ -107,7 +107,8 @@ const xpcomFilesLocal = [
 	'uri',
 	'translation/translate_item',
 	'translation/translator',
-	'server_connector'
+	'server_connector',
+	'zpdf'
 ];
 
 /** XPCOM files to be loaded only for connector translation and DB access **/
