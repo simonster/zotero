@@ -51,11 +51,6 @@ var Zotero_RecognizePDF = new function() {
 	 * of the new items
 	 */
 	this.recognizeSelected = function() {
-		var installed = ZoteroPane_Local.checkPDFConverter();
-		if (!installed) {
-			return;
-		}
-		
 		var items = ZoteroPane_Local.getSelectedItems();
 		if (!items) return;
 		var itemRecognizer = new Zotero_RecognizePDF.ItemRecognizer();
@@ -251,98 +246,47 @@ Zotero_RecognizePDF.Recognizer.prototype.recognize = function(file, libraryID, c
 	this._callback = callback;
 	//this._captchaCallback = captchaCallback;
 	
-	var cacheFile = Zotero.getZoteroDirectory();
-	cacheFile.append("recognizePDFcache.txt");
-	if(cacheFile.exists()) {
-		cacheFile.remove(false);
-	}
-	
-	Zotero.debug('Running pdftotext -enc UTF-8 -nopgbrk '
-				+ '-l ' + MAX_PAGES + ' "' + file.path + '" "'
-				+ cacheFile.path + '"');
-	
-	var proc = Components.classes["@mozilla.org/process/util;1"].
-			createInstance(Components.interfaces.nsIProcess);
-	var exec = Zotero.getZoteroDirectory();
-	exec.append(Zotero.Fulltext.pdfConverterFileName);
-	proc.init(exec);
-	
-	var args = ['-enc', 'UTF-8', '-nopgbrk', '-layout', '-l', MAX_PAGES];
-	args.push(file.path, cacheFile.path);
-	try {
-		if (!Zotero.isFx36) {
-			proc.runw(true, args, args.length);
-		}
-		else {
-			proc.run(true, args, args.length);
-		}
-	}
-	catch (e) {
-		Zotero.debug("Error running pdfinfo", 1);
-		Zotero.debug(e, 1);
-	}
-	
-	if(!cacheFile.exists()) {
-		this._callback(false, "recognizePDF.couldNotRead");
-		return;
-	}
-	
-	var inputStream = Components.classes["@mozilla.org/network/file-input-stream;1"]
-		.createInstance(Components.interfaces.nsIFileInputStream);
-	inputStream.init(cacheFile, 0x01, 0664, 0);
-	var intlStream = Components.classes["@mozilla.org/intl/converter-input-stream;1"]
-		.createInstance(Components.interfaces.nsIConverterInputStream);
-	intlStream.init(inputStream, "UTF-8", 65535,
-		Components.interfaces.nsIConverterInputStream.DEFAULT_REPLACEMENT_CHARACTER);
-	intlStream.QueryInterface(Components.interfaces.nsIUnicharLineInputStream);
-	
-	// get the lines in this sample
-	var lines = [];
-	var lineLengths = [];
-	var str = {};
-	while(intlStream.readLine(str)) {
-		var line = lineRe.exec(str.value);
-		if(line) {
-			lines.push(line[1]);
-			lineLengths.push(line[1].length);
-		}
-	}
-	
-	inputStream.close();
-	cacheFile.remove(false);
-	
-	// look for DOI
-	var allText = lines.join("\n");
-	Zotero.debug(allText);
-	var m = Zotero.Utilities.cleanDOI(allText);
-	if(m) {
-		this._DOI = m[0];
-	}
-	
-	// get (not quite) median length
-	var lineLengthsLength = lineLengths.length;
-	if(lineLengthsLength < 20
-			|| lines[0] === "This is a digital copy of a book that was preserved for generations on library shelves before it was carefully scanned by Google as part of a project") {
-		this._callback(false, "recognizePDF.noOCR");
-	} else {		
-		var sortedLengths = lineLengths.sort();
-		var medianLength = sortedLengths[Math.floor(lineLengthsLength/2)];
+	var me = this;
+	Zotero.Fulltext.pdfToText(file, MAX_PAGES).then(function(response) {
+		var text = response.text;
+		var lines = text.split("\n");
+		var lineLengths = [line.length for(line in lines)];
 		
-		// pick lines within 4 chars of the median (this is completely arbitrary)
-		this._goodLines = [];
-		var uBound = medianLength + 4;
-		var lBound = medianLength - 4;
-		for (var i=0; i<lineLengthsLength; i++) {
-			if(lineLengths[i] > lBound && lineLengths[i] < uBound) {
-				// Strip quotation marks so they don't mess up search query quoting
-				var line = lines[i].replace('"', '');
-				this._goodLines.push(line);
+		// look for DOI
+		Zotero.debug(text);
+		var m = Zotero.Utilities.cleanDOI(text);
+		if(m) {
+			me._DOI = m[0];
+		}
+		
+		// get (not quite) median length
+		var lineLengthsLength = lineLengths.length;
+		if(lineLengthsLength < 20
+				|| lines[0] === "This is a digital copy of a book that was preserved for generations on library shelves before it was carefully scanned by Google as part of a project") {
+			me._callback(false, "recognizePDF.noOCR");
+		} else {		
+			var sortedLengths = lineLengths.sort();
+			var medianLength = sortedLengths[Math.floor(lineLengthsLength/2)];
+			
+			// pick lines within 4 chars of the median (this is completely arbitrary)
+			me._goodLines = [];
+			var uBound = medianLength + 4;
+			var lBound = medianLength - 4;
+			for (var i=0; i<lineLengthsLength; i++) {
+				if(lineLengths[i] > lBound && lineLengths[i] < uBound) {
+					// Strip quotation marks so they don't mess up search query quoting
+					var line = lines[i].replace('"', '');
+					me._goodLines.push(line);
+				}
 			}
+			
+			me._startLine = me._iteration = 0;
+			me._queryGoogle();
 		}
-		
-		this._startLine = this._iteration = 0;
-		this._queryGoogle();
-	}
+	}, function(err) {
+		me._callback(false, "recognizePDF.couldNotRead");
+		throw err;
+	});
 }
 
 /**

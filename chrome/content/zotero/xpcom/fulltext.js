@@ -24,13 +24,13 @@
 */
 
 Zotero.Fulltext = new function(){
+	Components.utils.import("resource://gre/modules/Services.jsm");
+	Components.utils.import("resource://zotero/q.jsm");
+	
 	const FULLTEXT_VERSION = 1;
 	const CACHE_FILE = '.zotero-ft-cache';
 	
 	this.init = init;
-	this.registerPDFTool = registerPDFTool;
-	this.pdfConverterIsRegistered = pdfConverterIsRegistered;
-	this.pdfInfoIsRegistered = pdfInfoIsRegistered;
 	this.isCachedMIMEType = isCachedMIMEType;
 	this.indexWords = indexWords;
 	this.indexDocument = indexDocument;
@@ -59,122 +59,94 @@ Zotero.Fulltext = new function(){
 	this.HTMLToText = HTMLToText;
 	this.semanticSplitter = semanticSplitter;
 	
-	this.__defineGetter__("pdfToolsDownloadBaseURL", function() { return 'http://www.zotero.org/download/xpdf/'; });
-	this.__defineGetter__("pdfToolsName", function() { return 'Xpdf'; });
-	this.__defineGetter__("pdfToolsURL", function() { return 'http://www.foolabs.com/xpdf/'; });
-	this.__defineGetter__("pdfConverterName", function() { return 'pdftotext'; });
-	this.__defineGetter__("pdfInfoName", function() { return 'pdfinfo'; });
-	this.__defineGetter__("pdfConverterCacheFile", function () { return '.zotero-ft-cache'; });
-	this.__defineGetter__("pdfInfoCacheFile", function () { return '.zotero-ft-info'; });
-	
 	this.__defineGetter__("INDEX_STATE_UNAVAILABLE", function () { return 0; });
 	this.__defineGetter__("INDEX_STATE_UNINDEXED", function () { return 1; });
 	this.__defineGetter__("INDEX_STATE_PARTIAL", function () { return 2; });
 	this.__defineGetter__("INDEX_STATE_INDEXED", function () { return 3; });
 	
-	
-	var _pdfConverterVersion = null;
-	var _pdfConverterFileName = null;
-	var _pdfConverter = null; // nsIFile to executable
-	var _pdfInfoVersion = null;
-	var _pdfInfoFileName = null;
-	var _pdfInfo = null; // nsIFile to executable
-	
 	var self = this;
+	var _pdfjsWindow;
 	
-	function init() {
-		var platform = Zotero.platform.replace(' ', '-');
-		_pdfConverterFileName = this.pdfConverterName + '-' + platform;
-		_pdfInfoFileName = this.pdfInfoName + '-' + platform;
-		if (Zotero.isWin) {
-			_pdfConverterFileName += '.exe';
-			_pdfInfoFileName += '.exe';
-		}
-		
-		this.__defineGetter__("pdfConverterFileName", function() { return _pdfConverterFileName; });
-		this.__defineGetter__("pdfConverterVersion", function() { return _pdfConverterVersion; });
-		this.__defineGetter__("pdfInfoFileName", function() { return _pdfInfoFileName; });
-		this.__defineGetter__("pdfInfoVersion", function() { return _pdfInfoVersion; });
-		
-		this.registerPDFTool('converter');
-		this.registerPDFTool('info');
-	}
+	function init() {}
 	
-	
-	/*
-	 * Looks for pdftotext-{platform}[.exe] in the Zotero data directory
-	 *
-	 * {platform} is navigator.platform, with spaces replaced by hyphens
-	 *   e.g. "Win32", "Linux-i686", "MacPPC", "MacIntel", etc.
+	/**
+	 * Gets an instance of PDFJS
 	 */
-	function registerPDFTool(tool) {
-		var errMsg = false;
-		var exec = Zotero.getZoteroDirectory();
-		
-		switch (tool) {
-			case 'converter':
-				var toolName = this.pdfConverterName;
-				var fileName = _pdfConverterFileName
-				break;
-				
-			case 'info':
-				var toolName = this.pdfInfoName;
-				var fileName = _pdfInfoFileName
-				break;
+	this.getPDFJSWindow = function() {
+		if(_pdfjsWindow) {
+			return Q.fcall(function() {
+				return _pdfjsWindow;
+			});
+		} else {
+			var deferred = Q.defer();
 			
-			default:
-				throw ("Invalid PDF tool type '" + tool + "' in Zotero.Fulltext.registerPDFTool()");
+			// Get file:/// URI for pdf.js
+			var uri = Services.io.newURI("chrome://zotero/content/pdfjs/container.html", null, null);
+			uri = Components.classes["@mozilla.org/chrome/chrome-registry;1"]
+					.getService(Components.interfaces.nsIChromeRegistry).convertChromeURL(uri);
+			
+			// Load pdf.js in a new hidden browser
+			var browser = Zotero.Browser.createHiddenBrowser();
+			var listener = function(event) {
+				if(browser.contentDocument.documentURI === "about:blank") return;
+				browser.removeEventListener("DOMContentLoaded", listener, false);
+				_pdfjsWindow = browser.contentWindow;
+				deferred.resolve(_pdfjsWindow);
+			};
+			browser.addEventListener("DOMContentLoaded", listener, false);
+			browser.loadURI(uri.path);
+			Zotero.addShutdownListener(function() {
+				Zotero.Browser.deleteHiddenBrowser(browser);
+			});
+			
+			return deferred.promise;
 		}
+	};
+	
+	/**
+	 * Converts a PDF to a text string
+	 * @param {nsIFile} file
+	 * @param {Integer} maxPages The maximum number of pages to convert, or omitted to
+	 *     convert all pages
+	 * @return {Promise} A promise that resolves with an object in the form
+	 *     {"text":<<PDF TEXT CONTENT>>, "pagesConverted":<<NUMBER OF PAGES CONVERTED>>,
+	 *      "pagesTotal":<<TOTAL NUMBER OF PAGES IN PDF>>}
+	 */
+	this.pdfToText = function(file, maxPages) {
+		// I wish there was a way to do this asynchronously and get a typed array out,
+		// but I don't think there is. This is going to take 3x as much memory as the size 
+		// of the PDF, so let's hope the PDF is small or the user has lots of RAM.
+		var binaryString = Zotero.File.getBinaryContents(file);
+		var binaryArray = new Uint8Array(binaryString.length);
+		for(var i=0; i<binaryString.length; i++) {
+			binaryArray[i] = binaryString.charCodeAt(i);
+		}
+		binaryString = null;
 		
-		exec.append(fileName);
-		if (!exec.exists()) {
-			exec = null;
-			errMsg = fileName + ' not found';
-		}
-		
-		if (!exec) {
-			if (tool == 'converter') {
-				Zotero.debug(errMsg + ' -- PDF indexing disabled');
-			}
-			return false;
-		}
-		
-		var versionFile = exec.parent;
-		versionFile.append(fileName + '.version');
-		if (versionFile.exists()) {
-			var version = Zotero.File.getSample(versionFile).split(/[\r\n\s]/)[0];
-		}
-		if (!version) {
-			var version = 'UNKNOWN';
-		}
-		
-		switch (tool) {
-			case 'converter':
-				_pdfConverter = exec;
-				_pdfConverterVersion = version;
-				break;
+		return this.getPDFJSWindow().then(function(pdfjsWindow) {
+			var deferred = Q.defer(), listener = function(event) {
+				var message = event.data;
+				if(typeof message !== "object"
+					|| message.name !== "Zotero.pdfToText.response") return;
 				
-			case 'info':
-				_pdfInfo = exec;
-				_pdfInfoVersion = version;
-				break;
-		}
-		
-		Zotero.debug(toolName + ' version ' + version + ' registered at ' + exec.path);
-		
-		return true;
+				pdfjsWindow.removeEventListener("message", listener, false);
+				
+				if(message.error) {
+					deferred.reject(message.error);
+				} else {
+					deferred.resolve(message.response);
+				}
+			};
+			pdfjsWindow.addEventListener("message", listener, false);
+			pdfjsWindow.postMessage({
+				"name":"Zotero.pdfToText",
+				"pdf":binaryArray,
+				"maxPages":maxPages
+			}, "*");
+			
+			return deferred.promise;
+		});
 	}
-	
-	
-	function pdfConverterIsRegistered() {
-		return !!_pdfConverter;
-	}
-	
-	
-	function pdfInfoIsRegistered() {
-		return !!_pdfInfo;
-	}
-	
 	
 	/*
 	 * Returns true if MIME type is converted to text and cached before indexing
@@ -404,91 +376,18 @@ Zotero.Fulltext = new function(){
 	 * @param	 allPages	 If true, index all pages rather than pdfMaxPages
 	 */
 	function indexPDF(file, itemID, allPages) {
-		if (!_pdfConverter) {
-			return false;
-		}
-		
 		var maxPages = Zotero.Prefs.get('fulltext.pdfMaxPages');
 		if (maxPages == 0) {
 			return false;
 		}
 		
-		var item = Zotero.Items.get(itemID);
-		var linkMode = item.attachmentLinkMode;
-		// If file is stored outside of Zotero, create a directory for the item
-		// in the storage directory and save the cache file there
-		if (linkMode == Zotero.Attachments.LINK_MODE_LINKED_FILE) {
-			var cacheFile = Zotero.Attachments.createDirectoryForItem(itemID);
-		}
-		else {
-			var cacheFile = file.parent;
-		}
-		cacheFile.append(this.pdfConverterCacheFile);
-		
-		if (_pdfInfo) {
-			var infoFile = cacheFile.parent;
-			infoFile.append(this.pdfInfoCacheFile);
-			Zotero.debug('Running pdfinfo "' + file.path + '" "' + infoFile.path + '"');
-			
-			var proc = Components.classes["@mozilla.org/process/util;1"].
-					createInstance(Components.interfaces.nsIProcess);
-			proc.init(_pdfInfo);
-			
-			var args = [file.path, infoFile.path];
-			try {
-				proc.runw(true, args, args.length);
-				var totalPages = this.getTotalPagesFromFile(itemID);
-			}
-			catch (e) {
-				Zotero.debug("Error running pdfinfo");
-			}
-		}
-		else {
-			Zotero.debug(this.pdfInfoName + " is not available");
-		}
-		
-		Zotero.debug('Running pdftotext -enc UTF-8 -nopgbrk '
-			+ (allPages ? '' : '-l ' + maxPages) + ' "' + file.path + '" "'
-			+ cacheFile.path + '"');
-		
-		var proc = Components.classes["@mozilla.org/process/util;1"].
-				createInstance(Components.interfaces.nsIProcess);
-		proc.init(_pdfConverter);
-		
-		var args = ['-enc', 'UTF-8', '-nopgbrk'];
-		if (allPages) {
-			if (totalPages) {
-				var pagesIndexed = totalPages;
-			}
-		}
-		else {
-			args.push('-l', maxPages);
-			var pagesIndexed = Math.min(maxPages, totalPages);
-		}
-		args.push(file.path, cacheFile.path);
-		try {
-			proc.runw(true, args, args.length);
-		}
-		catch (e) {
-			Zotero.debug("Error running pdftotext");
-			return false;
-		}
-		
-		if (!cacheFile.exists()) {
-			var msg = file.leafName + " was not indexed";
-			if (!file.leafName.match(/^[\u0000-\u007F]+$/)) {
-				msg += " -- PDFs with filenames containing extended characters cannot currently be indexed due to a Firefox limitation";
-			}
-			Zotero.debug(msg, 2);
-			Components.utils.reportError(msg);
-			return false;
-		}
-		
-		Zotero.DB.beginTransaction();
-		this.indexFile(cacheFile, 'text/plain', 'utf-8', itemID, false, true);
-		this.setPages(itemID, { indexed: pagesIndexed, total: totalPages });
-		Zotero.DB.commitTransaction();
-		return true;
+		return this.pdfToText(file, allPages ? null : maxPages).then(function(response) {		
+			Zotero.DB.beginTransaction();
+			this.indexString(response.text, 'utf-8', itemID);
+			this.setPages(itemID, { indexed: response.pagesConverted,
+				total: response.pagesTotal });
+			Zotero.DB.commitTransaction();
+		});
 	}
 	
 	

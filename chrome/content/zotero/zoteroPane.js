@@ -1350,32 +1350,6 @@ var ZoteroPane = new function()
 	}
 	
 	
-	this.checkPDFConverter = function () {
-		if (Zotero.Fulltext.pdfConverterIsRegistered()) {
-			return true;
-		}
-		
-		var ps = Components.classes["@mozilla.org/embedcomp/prompt-service;1"]
-			.getService(Components.interfaces.nsIPromptService);
-		var buttonFlags = (ps.BUTTON_POS_0) * (ps.BUTTON_TITLE_IS_STRING)
-			+ (ps.BUTTON_POS_1) * (ps.BUTTON_TITLE_CANCEL);
-		var index = ps.confirmEx(
-			null,
-			// TODO: localize
-			"PDF Tools Not Installed",
-			"To use this feature, you must first install the PDF tools in "
-				+ "the Zotero preferences.",
-			buttonFlags,
-			"Open Preferences",
-			null, null, null, {}
-		);
-		if (index == 0) {
-			ZoteroPane_Local.openPreferences('zotero-prefpane-search', 'pdftools-install');
-		}
-		return false;
-	}
-	
-	
 	function reindexItem() {
 		var items = this.getSelectedItems();
 		if (!items) {
@@ -1391,14 +1365,6 @@ var ZoteroPane = new function()
 				checkPDF = true;
 			}
 			itemIDs.push(items[i].id);
-		}
-		
-		if (checkPDF) {
-			var installed = this.checkPDFConverter();
-			if (!installed) {
-				document.getElementById('zotero-attachment-box').updateItemIndexedState();
-				return;
-			}
 		}
 		
 		Zotero.Fulltext.indexItems(itemIDs, true);
@@ -2237,10 +2203,6 @@ var ZoteroPane = new function()
 				var items = this.getSelectedItems();
 				var canMerge = true, canIndex = true, canRecognize = true, canRename = true;
 				
-				if (!Zotero.Fulltext.pdfConverterIsRegistered()) {
-					canIndex = false;
-				}
-				
 				for each(var item in items) {
 					if (canMerge && !item.isRegularItem() || itemGroup.isDuplicates()) {
 						canMerge = false;
@@ -2351,8 +2313,7 @@ var ZoteroPane = new function()
 					}
 					
 					// If not linked URL, show reindex line
-					if (Zotero.Fulltext.pdfConverterIsRegistered()
-							&& Zotero.Fulltext.canReindex(item.id)) {
+					if (Zotero.Fulltext.canReindex(item.id)) {
 						show.push(m.reindexItem);
 						showSep4 = true;
 					}
