@@ -94,6 +94,7 @@ pref("extensions.zotero.export.bibliographyLocale", '');
 pref("extensions.zotero.export.citePaperJournalArticleURL", false);
 pref("extensions.zotero.export.displayCharsetOption", false);
 pref("extensions.zotero.import.charset", "auto");
+pref("extensions.zotero.import.createNewCollection.fromFileOpenHandler", true);
 pref("extensions.zotero.rtfScan.lastInputFile", "");
 pref("extensions.zotero.rtfScan.lastOutputFile", "");
 

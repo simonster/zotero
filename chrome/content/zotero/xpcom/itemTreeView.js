@@ -467,6 +467,12 @@ Zotero.ItemTreeView.prototype.notify = function(action, type, ids, extraData)
 				
 				var row = this._itemRowMap[id];
 				
+				// Deleted items get a modify that we have to ignore when
+				// not viewing the trash
+				if (item.deleted) {
+					continue;
+				}
+				
 				// Item already exists in this view
 				if( row != null)
 				{
@@ -505,12 +511,6 @@ Zotero.ItemTreeView.prototype.notify = function(action, type, ids, extraData)
 				
 				else if (((itemGroup.isLibrary() || itemGroup.isGroup()) && itemGroup.ref.libraryID == item.libraryID)
 							|| (itemGroup.isCollection() && item.inCollection(itemGroup.ref.id))) {
-					// Deleted items get a modify that we have to ignore when
-					// not viewing the trash
-					if (item.deleted) {
-						continue;
-					}
-					
 					// Otherwise the item has to be added
 					if(item.isRegularItem() || !item.getSource())
 					{
@@ -531,9 +531,22 @@ Zotero.ItemTreeView.prototype.notify = function(action, type, ids, extraData)
 		// If quicksearch, re-run it, since the results may have changed
 		else
 		{
-			quicksearch.doCommand();
-			madeChanges = true;
-			sort = true;
+			// If not viewing trash and all items were deleted, ignore modify
+			var allDeleted = true;
+			if (!itemGroup.isTrash()) {
+				var items = Zotero.Items.get(ids);
+				for each(var item in items) {
+					if (!item.deleted) {
+						allDeleted = false;
+						break;
+					}
+				}
+			}
+			if (!allDeleted) {
+				quicksearch.doCommand();
+				madeChanges = true;
+				sort = true;
+			}
 		}
 	}
 	else if(action == 'add')
@@ -617,7 +630,6 @@ Zotero.ItemTreeView.prototype.notify = function(action, type, ids, extraData)
 			}
 		}
 		
-		
 		if (singleSelect) {
 			if (sort) {
 				this.sort(typeof sort == 'number' ? sort : false);
@@ -680,6 +692,18 @@ Zotero.ItemTreeView.prototype.notify = function(action, type, ids, extraData)
 					}
 				}
 				else {
+					// If this was a child item and the next item at this
+					// position is a top-level item, move selection one row
+					// up to select a sibling or parent
+					if (ids.length == 1 && previousRow > 0) {
+						var previousItem = Zotero.Items.get(ids[0]);
+						if (previousItem && previousItem.getSource()) {
+							if (this._dataItems[previousRow] && this.getLevel(previousRow) == 0) {
+								previousRow--;
+							}
+						}
+					}
+					
 					if (this._dataItems[previousRow]) {
 						this.selection.select(previousRow);
 					}
@@ -1129,18 +1153,14 @@ Zotero.ItemTreeView.prototype.sort = function(itemID)
 	
 	var includeTrashed = this._itemGroup.isTrash();
 	
-	var me = this;
+	var me = this,
+		isEmptyFirst = emptyFirst[columnField];
 	function rowSort(a, b) {
-		var cmp, fieldA, fieldB;
-		
-		var aItemID = a.id;
-		if (cache[aItemID]) {
-			fieldA = cache[aItemID];
-		}
-		var bItemID = b.id;
-		if (cache[bItemID]) {
+		var cmp,
+			aItemID = a.id,
+			bItemID = b.id,
+			fieldA = cache[aItemID],
 			fieldB = cache[bItemID];
-		}
 		
 		switch (columnField) {
 			case 'date':
@@ -1148,14 +1168,14 @@ Zotero.ItemTreeView.prototype.sort = function(itemID)
 				fieldB = b.getField('date', true).substr(0, 10);
 				
 				cmp = strcmp(fieldA, fieldB);
-				if (cmp) {
+				if (cmp !== 0) {
 					return cmp;
 				}
 				break;
 			
 			case 'firstCreator':
 				cmp = creatorSort(a, b);
-				if (cmp) {
+				if (cmp !== 0) {
 					return cmp;
 				}
 				break;
@@ -1165,40 +1185,35 @@ Zotero.ItemTreeView.prototype.sort = function(itemID)
 				var typeB = Zotero.ItemTypes.getLocalizedString(b.ref.itemTypeID);
 				
 				cmp = (typeA > typeB) ? -1 : (typeA < typeB) ? 1 : 0;
-				if (cmp) {
+				if (cmp !== 0) {
 					return cmp;
 				}
 				break;
 				
 			default:
-				if (fieldA == undefined) {
-					fieldA = getField(a);
-					cache[aItemID] = fieldA;
+				if (fieldA === undefined) {
+					cache[aItemID] = fieldA = getField(a);
 				}
 				
-				if (fieldB == undefined) {
-					fieldB = getField(b);
-					cache[bItemID] = fieldB;
+				if (fieldB === undefined) {
+					cache[bItemID] = fieldB = getField(b);
 				}
 				
 				// Display rows with empty values last
-				if (!emptyFirst[columnField]) {
-					cmp = (fieldA == '' && fieldB != '') ? -1 :
-						(fieldA != '' && fieldB == '') ? 1 : 0;
-					if (cmp) {
-						return cmp;
-					}
+				if (!isEmptyFirst) {
+					if(fieldA === '' && fieldB !== '') return -1;
+					if(fieldA !== '' && fieldB === '') return 1;
 				}
 				
 				cmp = collation.compareString(1, fieldB, fieldA);
-				if (cmp) {
+				if (cmp !== 0) {
 					return cmp;
 				}
 		}
 		
 		if (columnField !== 'firstCreator') {
 			cmp = creatorSort(a, b);
-			if (cmp) {
+			if (cmp !== 0) {
 				return cmp;
 			}
 		}
@@ -1208,7 +1223,7 @@ Zotero.ItemTreeView.prototype.sort = function(itemID)
 			fieldB = b.getField('date', true).substr(0, 10);
 			
 			cmp = strcmp(fieldA, fieldB);
-			if (cmp) {
+			if (cmp !== 0) {
 				return cmp;
 			}
 		}
@@ -1224,41 +1239,43 @@ Zotero.ItemTreeView.prototype.sort = function(itemID)
 		//
 		// Try sorting by first word in firstCreator field, since we already have it
 		//
-		var fieldA = firstCreatorSortCache[a.id];
-		if (fieldA == undefined) {
+		var aItemID = a.id,
+			bItemID = b.id,
+			fieldA = firstCreatorSortCache[aItemID],
+			fieldB = firstCreatorSortCache[bItemID];
+		if (fieldA === undefined) {
 			var matches = Zotero.Items.getSortTitle(a.getField('firstCreator')).match(/^[^\s]+/);
 			var fieldA = matches ? matches[0] : '';
-			firstCreatorSortCache[a.id] = fieldA;
+			firstCreatorSortCache[aItemID] = fieldA;
 		}
-		
-		var fieldB = firstCreatorSortCache[b.id];
-		if (fieldB == undefined) {
+		if (fieldB === undefined) {
 			var matches = Zotero.Items.getSortTitle(b.getField('firstCreator')).match(/^[^\s]+/);
 			var fieldB = matches ? matches[0] : '';
-			firstCreatorSortCache[b.id] = fieldB;
+			firstCreatorSortCache[bItemID] = fieldB;
 		}
 		
-		if (!fieldA && !fieldB) {
+		if (fieldA === "" && fieldB === "") {
 			return 0;
 		}
 		
 		var cmp = strcmp(fieldA, fieldB, true);
-		if (cmp) {
-			return cmp
+		if (cmp !== 0) {
+			return cmp;
 		}
 		
 		//
 		// If first word is the same, compare actual creators
 		//
-		var aCreators = a.ref.getCreators();
-		var bCreators = b.ref.getCreators();
-		var aNumCreators = a.ref.numCreators();
-		var bNumCreators = b.ref.numCreators();
-		
-		var aPrimary = Zotero.CreatorTypes.getPrimaryIDForType(a.ref.itemTypeID);
-		var bPrimary = Zotero.CreatorTypes.getPrimaryIDForType(b.ref.itemTypeID);
-		var editorTypeID = 3;
-		var contributorTypeID = 2;
+		var aRef = a.ref,
+			bRef = b.ref,
+			aCreators = aRef.getCreators(),
+			bCreators = bRef.getCreators(),
+			aNumCreators = aCreators.length,
+			bNumCreators = bCreators.length,
+			aPrimary = Zotero.CreatorTypes.getPrimaryIDForType(aRef.itemTypeID),
+			bPrimary = Zotero.CreatorTypes.getPrimaryIDForType(bRef.itemTypeID);
+		const editorTypeID = 3,
+			contributorTypeID = 2;
 		
 		// Find the first position of each possible creator type
 		var aPrimaryFoundAt = false;
@@ -1339,14 +1356,14 @@ Zotero.ItemTreeView.prototype.sort = function(itemID)
 			// Compare names
 			fieldA = Zotero.Items.getSortTitle(aCreators[aPos].ref.lastName);
 			fieldB = Zotero.Items.getSortTitle(bCreators[bPos].ref.lastName);
-			var cmp = strcmp(fieldA, fieldB, true);
+			cmp = strcmp(fieldA, fieldB, true);
 			if (cmp) {
 				return cmp;
 			}
 			
 			fieldA = Zotero.Items.getSortTitle(aCreators[aPos].ref.firstName);
 			fieldB = Zotero.Items.getSortTitle(bCreators[bPos].ref.firstName);
-			var cmp = strcmp(fieldA, fieldB, true);
+			cmp = strcmp(fieldA, fieldB, true);
 			if (cmp) {
 				return cmp;
 			}
@@ -1359,7 +1376,7 @@ Zotero.ItemTreeView.prototype.sort = function(itemID)
 				if (!aCreators[aPos]) {
 					Components.utils.reportError(
 						"Creator is missing at position " + aPos
-						+ " for item " + a.ref.libraryID + "/" + a.ref.key
+						+ " for item " + aRef.libraryID + "/" + aRef.key
 					);
 					return -1;
 				}
@@ -1378,7 +1395,7 @@ Zotero.ItemTreeView.prototype.sort = function(itemID)
 				if (!bCreators[bPos]) {
 					Components.utils.reportError(
 						"Creator is missing at position " + bPos
-						+ " for item " + b.ref.libraryID + "/" + b.ref.key
+						+ " for item " + bRef.libraryID + "/" + bRef.key
 					);
 					return -1;
 				}
@@ -1404,10 +1421,8 @@ Zotero.ItemTreeView.prototype.sort = function(itemID)
 	
 	function strcmp(a, b, collationSort) {
 		// Display rows with empty values last
-		var cmp = (a == '' && b != '') ? -1 : (a != '' && b == '') ? 1 : 0;
-		if (cmp) {
-			return cmp;
-		}
+		if(a === '' && b !== '') return -1;
+		if(a !== '' && b === '') return 1;
 		
 		if (collationSort) {
 			return collation.compareString(1, b, a);
@@ -1688,16 +1703,18 @@ Zotero.ItemTreeView.prototype.setFilter = function(type, data) {
 	var savedOpenState = this.saveOpenState();
 	var savedFirstRow = this.saveFirstRow();
 	
+	var isDirty;
 	switch (type) {
 		case 'search':
-			this._itemGroup.setSearch(data);
+			isDirty = this._itemGroup.setSearch(data);
 			break;
 		case 'tags':
-			this._itemGroup.setTags(data);
+			isDirty = this._itemGroup.setTags(data);
 			break;
 		default:
 			throw ('Invalid filter type in setFilter');
 	}
+	if(!isDirty) return false;
 	var oldCount = this.rowCount;
 	this.refresh();
 	
@@ -1712,6 +1729,7 @@ Zotero.ItemTreeView.prototype.setFilter = function(type, data) {
 	
 	//Zotero.debug('Running callbacks in itemTreeView.setFilter()', 4);
 	this._runCallbacks();
+	return true;
 }
 
 
@@ -1845,15 +1863,6 @@ Zotero.ItemTreeView.prototype.saveOpenState = function(close) {
 		this._refreshHashMap();
 	}
 	return itemIDs;
-	
-	
-	var ids = [];
-	for (var i=0, len=this.rowCount; i<len; i++) {
-		if (this.isContainer(i) && this.isContainerOpen(i)) {
-			ids.push(this._getItemAtRow(i).ref.id);
-		}
-	}
-	return ids;
 }
 
 
@@ -1862,12 +1871,15 @@ Zotero.ItemTreeView.prototype.rememberOpenState = function(itemIDs) {
 	for each(var id in itemIDs) {
 		var row = this._itemRowMap[id];
 		// Item may not still exist
-		if (!row) {
+		if (row == undefined) {
 			continue;
 		}
 		rowsToOpen.push(row);
 	}
-	rowsToOpen.sort();
+	rowsToOpen.sort(function (a, b) {
+		return a - b;
+	});
+	
 	this._treebox.beginUpdateBatch();
 	// Reopen from bottom up
 	for (var i=rowsToOpen.length-1; i>=0; i--) {
@@ -2078,20 +2090,6 @@ Zotero.ItemTreeCommandController.prototype.onEvent = function(evt)
  * Start a drag using HTML 5 Drag and Drop
  */
 Zotero.ItemTreeView.prototype.onDragStart = function (event) {
-	// Quick implementation of dragging of XML item format
-	if (this._itemGroup.isShare()) {
-		var items = this.getSelectedItems();
-		
-		var xml = <data/>;
-		for (var i=0; i<items.length; i++) {
-			var xmlNode = Zotero.Sync.Server.Data.itemToXML(items[i]);
-			xml.items.item += xmlNode;
-		}
-		Zotero.debug(xml.toXMLString());
-		event.dataTransfer.setData("zotero/item-xml", xml.toXMLString());
-		return;
-	}
-	
 	var itemIDs = this.saveSelection();
 	var items = Zotero.Items.get(itemIDs);
 	

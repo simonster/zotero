@@ -417,6 +417,8 @@ Zotero.Translate.SandboxManager = function(sandboxLocation) {
 			return s.serializeToString(Zotero.Translate.DOMWrapper.unwrap(doc));
 		};
 	};
+	this.sandbox.XMLSerializer.__exposedProps__ = {"prototype":"r"};
+	this.sandbox.XMLSerializer.prototype = {};
 }
 
 Zotero.Translate.SandboxManager.prototype = {
@@ -636,7 +638,7 @@ Zotero.Translate.IO.Read = function(file, mode) {
 
 Zotero.Translate.IO.Read.prototype = {
 	"__exposedProps__":{
-		"_getXML":"r",
+		"getXML":"r",
 		"RDF":"r",
 		"read":"r",
 		"setCharacterSet":"r"
@@ -730,12 +732,15 @@ Zotero.Translate.IO.Read.prototype = {
 		return str.value;
 	},
 	
-	"_getXML":function() {
-		if(this._mode == "xml/dom") {
-			return Zotero.Translate.IO.parseDOMXML(this._rawStream, this._charset, this.file.fileSize);
-		} else {
-			return this._readToString().replace(/<\?xml[^>]+\?>/, "");
+	"getXML":function() {
+		if(this.bytesRead !== 0) this._seekToStart(this._charset);
+		try {
+			var xml = Zotero.Translate.IO.parseDOMXML(this._rawStream, this._charset, this.file.fileSize);
+		} catch(e) {
+			this._xmlInvalid = true;
+			throw e;
 		}
+		return (Zotero.isFx ? Zotero.Translate.DOMWrapper.wrap(xml) : xml);
 	},
 	
 	"init":function(newMode, callback) {
@@ -745,7 +750,9 @@ Zotero.Translate.IO.Read.prototype = {
 		this._seekToStart(this._charset);
 		
 		this._mode = newMode;
-		if(Zotero.Translate.IO.rdfDataModes.indexOf(this._mode) !== -1 && !this.RDF) {
+		if(newMode === "xml/e4x") {
+			throw "E4X is not supported";
+		} else if(Zotero.Translate.IO.rdfDataModes.indexOf(this._mode) !== -1 && !this.RDF) {
 			this._initRDF();
 		}
 		

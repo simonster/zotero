@@ -35,8 +35,13 @@ const ZOTERO_CONFIG = {
 	API_URL: 'https://api.zotero.org/',
 	PREF_BRANCH: 'extensions.zotero.',
 	BOOKMARKLET_URL: 'https://www.zotero.org/bookmarklet/',
-	VERSION: "3.5a1.SOURCE"
+	VERSION: "3.0.8.SOURCE"
 };
+
+// Commonly used imports accessible anywhere
+Components.utils.import("resource://zotero/q.js");
+Components.utils.import("resource://gre/modules/XPCOMUtils.jsm");
+Components.utils.import("resource://gre/modules/Services.jsm");
 
 /*
  * Core functions
@@ -1465,16 +1470,20 @@ const ZOTERO_CONFIG = {
 	 * If errorHandler is specified, exceptions in the generator will be caught
 	 * and passed to the callback
 	 */
-	this.pumpGenerator = function(generator, ms, errorHandler) {
+	this.pumpGenerator = function(generator, ms, errorHandler, doneHandler) {
 		_waiting++;
 		
 		var timer = Components.classes["@mozilla.org/timer;1"].
-			createInstance(Components.interfaces.nsITimer);
+			createInstance(Components.interfaces.nsITimer),
+			yielded,
+			useJIT = Components.utils.methodjit;
 		var timerCallback = {"notify":function() {
+			Components.utils.methodjit = useJIT;
+			
 			var err = false;
 			_waiting--;
 			try {
-				if(generator.next()) {
+				if((yielded = generator.next()) !== false) {
 					_waiting++;
 					return;
 				}
@@ -1500,12 +1509,25 @@ const ZOTERO_CONFIG = {
 				} else {
 					throw err;
 				}
+			} else if(doneHandler) {
+				doneHandler(yielded);
 			}
 		}}
 		timer.initWithCallback(timerCallback, ms ? ms : 0, Components.interfaces.nsITimer.TYPE_REPEATING_SLACK);
 		// add timer to global scope so that it doesn't get garbage collected before it completes
 		_runningTimers.push(timer);
-	}
+	};
+	
+	/**
+	 * Pumps a generator until it yields false. Unlike the above, this returns a promise.
+	 */
+	this.promiseGenerator = function(generator, ms) {
+		var deferred = Q.defer();
+		this.pumpGenerator(generator, ms,
+			function(e) { deferred.reject(e); },
+			function(data) { deferred.resolve(data) });
+		return deferred.promise;
+	};
 	
 	/**
 	 * Emulates the behavior of window.setTimeout, but ensures that callbacks do not get called
@@ -1518,8 +1540,11 @@ const ZOTERO_CONFIG = {
 	 */
 	this.setTimeout = function(func, ms, runWhenWaiting) {
 		var timer = Components.classes["@mozilla.org/timer;1"].
-			createInstance(Components.interfaces.nsITimer);
+			createInstance(Components.interfaces.nsITimer),
+			useJIT = Components.utils.methodjit;
 		var timerCallback = {"notify":function() {
+			Components.utils.methodjit = useJIT;
+			
 			if(_waiting && !runWhenWaiting) {
 				// if our callback gets called during Zotero.wait(), queue it to be set again
 				// when Zotero.wait() completes
@@ -2331,78 +2356,6 @@ Zotero.VersionHeader = {
 								.getService(Components.interfaces.nsIObserverService);
 		observerService.removeObserver(Zotero.VersionHeader, "http-on-modify-request");
 	}
-}
-
-
-
-/**
-* Class for creating hash arrays that behave a bit more sanely
-*
-*   Hashes can be created in the constructor by alternating key and val:
-*
-*   var hasharray = new Zotero.Hash('foo','foovalue','bar','barvalue');
-*
-*   Or using hasharray.set(key, val)
-*
-*   _val_ defaults to true if not provided
-*
-*   If using foreach-style looping, be sure to use _for (i in arr.items)_
-*   rather than just _for (i in arr)_, or else you'll end up with the
-*   methods and members instead of the hash items
-*
-*   Most importantly, hasharray.length will work as expected, even with
-*   non-numeric keys
-*
-* Adapated from http://www.mojavelinux.com/articles/javascript_hashes.html
-* (c) Mojavelinux, Inc.
-* License: Creative Commons
-**/
-Zotero.Hash = function(){
-	this.length = 0;
-	this.items = {};
-	
-	// Public methods defined on prototype below
-	
-	for (var i = 0; i < arguments.length; i += 2) {
-		if (typeof(arguments[i + 1]) != 'undefined') {
-			this.items[arguments[i]] = arguments[i + 1];
-			this.length++;
-		}
-	}
-}
-
-Zotero.Hash.prototype.get = function(in_key){
-	return this.items[in_key] ? this.items[in_key] : false;
-}
-
-Zotero.Hash.prototype.set = function(in_key, in_value){
-	// Default to a boolean hash if value not provided
-	if (typeof(in_value) == 'undefined'){
-		in_value = true;
-	}
-	
-	if (typeof(this.items[in_key]) == 'undefined') {
-		this.length++;
-	}
-	
-	this.items[in_key] = in_value;
-	
-	return in_value;
-}
-
-Zotero.Hash.prototype.remove = function(in_key){
-	var tmp_value;
-	if (typeof(this.items[in_key]) != 'undefined') {
-		this.length--;
-		var tmp_value = this.items[in_key];
-		delete this.items[in_key];
-	}
-	
-	return tmp_value;
-}
-
-Zotero.Hash.prototype.has = function(in_key){
-	return typeof(this.items[in_key]) != 'undefined';
 }
 
 Zotero.DragDrop = {

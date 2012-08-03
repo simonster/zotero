@@ -238,12 +238,9 @@ Zotero_RecognizePDF.Recognizer = function () {}
  *	(function will be passed image as URL and must return text of CAPTCHA)
  */
 Zotero_RecognizePDF.Recognizer.prototype.recognize = function(file, libraryID, callback, captchaCallback) {
-	const lineRe = /^\s*([^\s]+(?: [^\s]+)+)/;
-	
 	this._libraryID = libraryID;
 	this._callback = callback;
 	//this._captchaCallback = captchaCallback;
-	
 	
 	var me = this;
 	Zotero.PDF.getMetadata(file).then(function(metadata) {
@@ -286,20 +283,33 @@ Zotero_RecognizePDF.Recognizer.prototype.recognize = function(file, libraryID, c
  * Loads text out of the PDF and looks for a DOI or queries Google
  */
 Zotero_RecognizePDF.Recognizer.prototype._loadText = function(file) {
-	const MAX_PAGES = 3;
+	const MAX_PAGES = 7;
+	const MAX_LINES = 80;
 	
 	var me = this;
 	Zotero.PDF.pdfToText(file, MAX_PAGES).then(function(response) {
-		var text = response.text;
-		var lines = text.split("\n");
-		var lineLengths = [line.length for(line in lines)];
+		Zotero.debug(response);
+		var text = response.text,
+			dirtyLines = text.split("\n"),
+			lines = [],
+			lineLengths = [];
+		
+		const lineRe = /^\s*([^\s]+(?: [^\s]+)+)/;
+		for(var i=0; i<dirtyLines.length && lines.length < 80; i++) {
+			var m = lineRe.exec(dirtyLines[i]);
+			if(m) {
+				lines.push(m[1]);
+				lineLengths.push(m[1].length);
+			}
+		}
 		
 		// look for DOI
-		Zotero.debug(text);
 		var m = Zotero.Utilities.cleanDOI(text);
 		if(m && !me._DOI) {
 			me._DOI = m[0];
 		}
+		var isbns = me._findISBNs(text);
+		if(isbns.length) this._ISBN = isbns[0];
 		
 		// get (not quite) median length
 		var lineLengthsLength = lineLengths.length;
@@ -326,9 +336,68 @@ Zotero_RecognizePDF.Recognizer.prototype._loadText = function(file) {
 			me._queryGoogle();
 		}
 	}).fail(function(err) {
+		Zotero.logError(err);
 		me._callback(false, "recognizePDF.couldNotRead");
-		throw err;
 	});
+}
+
+/**
+ * Search ISBNs in text
+ * @private
+ * @return array with ISBNs
+ */
+Zotero_RecognizePDF.Recognizer.prototype._findISBNs = function(x) {
+	if(typeof(x) != "string") {
+		throw "findISBNs: argument must be a string";
+	}
+	var isbns = [];
+
+	// Match lines saying "isbn: " or "ISBN-10:" or similar, consider m-dashes and n-dashes as well
+	var pattern = /(SBN|sbn)[ \u2014\u2013\u2012-]?(10|13)?[: ]*([0-9X][0-9X \u2014\u2013\u2012-]+)/g; 
+	var match;
+	
+	while (match = pattern.exec(x)) {
+		var isbn = match[3];
+		isbn = isbn.replace(/[ \u2014\u2013\u2012-]/g, '');
+		if(isbn.length==20 || isbn.length==26) { 
+			// Handle the case of two isbns (e.g. paper+hardback) next to each other
+			isbns.push(isbn.slice(0,isbn.length/2), isbn.slice(isbn.length/2));
+		} else if(isbn.length==23) { 
+			// Handle the case of two isbns (10+13) next to each other
+			isbns.push(isbn.slice(0,10), isbn.slice(10));
+		} else if(isbn.length==10 || isbn.length==13) {
+			isbns.push(isbn);
+		}
+	}
+
+	// Validate ISBNs
+	var validIsbns = [];
+	for (var i =0; i < isbns.length; i++) {
+		if(this._isValidISBN(isbns[i])) validIsbns.push(isbns[i]);
+	}
+	return validIsbns;
+}
+
+Zotero_RecognizePDF.Recognizer.prototype._isValidISBN = function(isbn) {
+	if(isbn.length == 13) {
+		// ISBN-13 should start with 978 or 979 i.e. GS1 for book publishing industry
+		var prefix = isbn.slice(0,3);
+		if (prefix != "978" && prefix != "979") return false;
+		// Verify check digit
+		var check = 0;
+		for (var i = 0; i < 13; i+=2) check += isbn[i]*1;
+		for (i = 1; i < 12; i+=2) check += 3 * isbn[i]*1;
+		return (check % 10 == 0);
+	} else if(isbn.length == 10) {
+		// Verify ISBN-10 check digit
+		var check = 0;
+		for (var i = 0; i < 9; i++) check += isbn[i]*1 * (10-i);
+		// last number might be 'X'
+		if (isbn[9] == 'X' || isbn[9] == 'x') check += 10;
+		else check += isbn[i]*1;
+		return (check % 11 == 0);
+	}
+	return false;
 }
 
 /**
@@ -347,11 +416,18 @@ Zotero_RecognizePDF.Recognizer.prototype._queryGoogle = function() {
 
 	var queryString = "";
 	var me = this;
-	if(this._DOI) {
-		// use CrossRef to look for DOI
+	if(this._DOI || this._ISBN) {
 		var translate = new Zotero.Translate.Search();
-		translate.setTranslator("11645bd1-0420-45c1-badb-53fb41eeb753");
-		var item = {"itemType":"journalArticle", "DOI":this._DOI};
+		var item = {};
+		if(this._DOI) {
+			// use CrossRef to look for DOI
+			translate.setTranslator("11645bd1-0420-45c1-badb-53fb41eeb753");
+			item = {"itemType":"journalArticle", "DOI":this._DOI};
+		} else if(this._ISBN) {
+			// use Open WorldCat to look for ISBN
+			translate.setTranslator("c73a4a8c-3ef1-4ec8-8229-7531ee384cc4"); 
+			item = {"itemType":"book", "ISBN":this._ISBN};
+		}
 		translate.setSearch(item);
 		translate.setHandler("itemDone", function(translate, item) {
 			me._callback(item);
@@ -363,7 +439,8 @@ Zotero_RecognizePDF.Recognizer.prototype._queryGoogle = function() {
 			if(!success) me._queryGoogle();
 		});
 		translate.translate(this._libraryID, false);
-		delete this._DOI;
+		if(this._DOI) delete this._DOI;
+		else if(this._ISBN) delete this.ISBN;
 	} else {
 		// take the relevant parts of some lines (exclude hyphenated word)
 		var queryStringWords = 0;

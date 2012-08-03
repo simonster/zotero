@@ -304,24 +304,19 @@ Zotero.Utilities = {
 	 * @type String
 	 */
 	 "htmlSpecialChars":function(/**String*/ str) {
-		if (typeof str != 'string') {
-			throw "Argument '" + str + "' must be a string in Zotero.Utilities.htmlSpecialChars()";
-		}
+		if (typeof str != 'string') str = str.toString();
 		
 		if (!str) {
 			return '';
 		}
 		
-		var chars = ['&', '"',"'",'<','>'];
-		var entities = ['amp', 'quot', 'apos', 'lt', 'gt'];
-		
-		var newString = str;
-		for (var i = 0; i < chars.length; i++) {
-			var re = new RegExp(chars[i], 'g');
-			newString = newString.replace(re, '&' + entities[i] + ';');
-		}
-		
-		newString = newString.replace(/&lt;ZOTERO([^\/]+)\/&gt;/g, function (str, p1, offset, s) {
+		return str
+			.replace(/&/g, '&amp;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&apos;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/&lt;ZOTERO([^\/]+)\/&gt;/g, function (str, p1, offset, s) {
 			switch (p1) {
 				case 'BREAK':
 					return '<br/>';
@@ -331,41 +326,64 @@ Zotero.Utilities = {
 					return p1;
 			}
 		});
-		
-		return newString;
 	},
 
 	/**
 	 * Decodes HTML entities within a string, returning plain text
 	 * @type String
 	 */
-	"unescapeHTML":function(/**String*/ str) {
-		// If no tags, no need to unescape
-		if(str.indexOf("<") === -1 && str.indexOf("&") === -1) return str;
+	"unescapeHTML":new function() {
+		var nsIScriptableUnescapeHTML, node;
 		
-		if(Zotero.isFx && !Zotero.isBookmarklet) {
-			if(!Zotero.Utilities._nsISUHTML) {
-				Zotero.Utilities._nsISUHTML = Components.classes["@mozilla.org/feed-unescapehtml;1"]
-					.getService(Components.interfaces.nsIScriptableUnescapeHTML);
-			}
-			return Zotero.Utilities._nsISUHTML.unescape(str);
-		} else if(Zotero.isNode) {
-			/*var doc = require('jsdom').jsdom(str, null, {
-				"features":{
-					"FetchExternalResources":false,
-					"ProcessExternalResources":false,
-					"MutationEvents":false,
-					"QuerySelector":false
+		return function(/**String*/ str) {
+			// If no tags, no need to unescape
+			if(str.indexOf("<") === -1 && str.indexOf("&") === -1) return str;
+			
+			if(Zotero.isFx && !Zotero.isBookmarklet) {
+				// Create a node and use the textContent property to do unescaping where
+				// possible, because this approach preserves <br/>
+				if(node === undefined) {
+					var platformVersion = Components.classes["@mozilla.org/xre/app-info;1"]
+						.getService(Components.interfaces.nsIXULAppInfo).platformVersion;
+					if(Components.classes["@mozilla.org/xpcom/version-comparator;1"]
+							.getService(Components.interfaces.nsIVersionComparator)
+							.compare(platformVersion, "12.0") >= 0) {
+						var parser = Components.classes["@mozilla.org/xmlextras/domparser;1"]
+							 .createInstance(Components.interfaces.nsIDOMParser);
+						var domDocument = parser.parseFromString("<!DOCTYPE html><html></html>",
+							"text/html");
+						node = domDocument.createElement("div");
+					} else {
+						node = false;
+					}
 				}
-			});
-			if(!doc.documentElement) return str;
-			return doc.documentElement.textContent;*/
-			return Zotero.Utilities.cleanTags(str);
-		} else {
-			var node = document.createElement("div");
-			node.innerHTML = str;
-			return node.textContent;
-		}
+				
+				if(node) {
+					node.innerHTML = str;
+					return node.textContent.replace(/ {2,}/g, " ");
+				} else if(!nsIScriptableUnescapeHTML) {
+					nsIScriptableUnescapeHTML = Components.classes["@mozilla.org/feed-unescapehtml;1"]
+						.getService(Components.interfaces.nsIScriptableUnescapeHTML);
+				}
+				return nsIScriptableUnescapeHTML.unescape(str);
+			} else if(Zotero.isNode) {
+				/*var doc = require('jsdom').jsdom(str, null, {
+					"features":{
+						"FetchExternalResources":false,
+						"ProcessExternalResources":false,
+						"MutationEvents":false,
+						"QuerySelector":false
+					}
+				});
+				if(!doc.documentElement) return str;
+				return doc.documentElement.textContent;*/
+				return Zotero.Utilities.cleanTags(str);
+			} else {
+				if(!node) node = document.createElement("div");
+				node.innerHTML = str;
+				return ("textContent" in node ? node.textContent : node.innerText).replace(/ {2,}/g, " ");
+			}
+		};
 	},
 	
 	/**
@@ -668,7 +686,7 @@ Zotero.Utilities = {
 					} else {
 						// this is not a skip word or comes after a colon;
 						// we must capitalize
-						words[i] = upperCaseVariant[0] + lowerCaseVariant.substr(1);
+						words[i] = upperCaseVariant.substr(0, 1) + lowerCaseVariant.substr(1);
 					}
 				}
 				
@@ -938,7 +956,7 @@ Zotero.Utilities = {
 			};
 		}
 		
-		if(!(elements instanceof Array)) elements = [elements];
+		if(!("length" in elements)) elements = [elements];
 		
 		var results = [];
 		for(var i=0, n=elements.length; i<n; i++) {
@@ -956,18 +974,29 @@ Zotero.Utilities = {
 				throw new Error("First argument must be either element(s) or document(s) in Zotero.Utilities.xpath(elements, '"+xpath+"')");
 			}
 			
-			try {
-				var xpathObject = rootDoc.evaluate(xpath, element, nsResolver, 5, // 5 = ORDERED_NODE_ITERATOR_TYPE
-					null);
-			} catch(e) {
-				// rethrow so that we get a stack
-				throw new Error(e.name+": "+e.message);
-			}
-			
-			var newEl;
-			while(newEl = xpathObject.iterateNext()) {
-				// Firefox 5 hack
-				results.push(isWrapped ? Zotero.Translate.DOMWrapper.wrap(newEl) : newEl);
+			if(!Zotero.isIE || "evaluate" in rootDoc) {
+				try {
+					var xpathObject = rootDoc.evaluate(xpath, element, nsResolver, 5, // 5 = ORDERED_NODE_ITERATOR_TYPE
+						null);
+				} catch(e) {
+					// rethrow so that we get a stack
+					throw new Error(e.name+": "+e.message);
+				}
+				
+				var newEl;
+				while(newEl = xpathObject.iterateNext()) {
+					// Firefox 5 hack
+					results.push(isWrapped ? Zotero.Translate.DOMWrapper.wrap(newEl) : newEl);
+				}
+			} else if("selectNodes" in element) {
+				// We use JavaScript-XPath in IE for HTML documents, but with an XML
+				// document, we need to use selectNodes
+				var nodes = element.selectNodes(xpath);
+				for(var i=0; i<nodes.length; i++) {
+					results.push(nodes[i]);
+				}
+			} else {
+				throw new Error("XPath functionality not available");
 			}
 		}
 		
@@ -990,7 +1019,11 @@ Zotero.Utilities = {
 		
 		var strings = new Array(elements.length);
 		for(var i=0, n=elements.length; i<n; i++) {
-			strings[i] = elements[i].textContent;
+			var el = elements[i];
+			strings[i] = "textContent" in el ? el.textContent
+				: "innerText" in el ? el.innerText
+				: "text" in el ? el.text
+				: el.nodeValue;
 		}
 		
 		return strings.join(delimiter !== undefined ? delimiter : ", ");
@@ -1322,7 +1355,11 @@ Zotero.Utilities = {
 				
 				if(!creatorType) continue;
 				
-				var nameObj = {'family':creator.lastName, 'given':creator.firstName};
+				if(creator.fieldMode == 1) {
+					var nameObj = {'literal':creator.lastName};
+				} else {
+					var nameObj = {'family':creator.lastName, 'given':creator.firstName};
+				}
 				
 				if(cslItem[creatorType]) {
 					cslItem[creatorType].push(nameObj);
@@ -1374,7 +1411,7 @@ Zotero.Utilities = {
 		var isZoteroItem = item instanceof Zotero.Item, zoteroType;
 		
 		for(var type in CSL_TYPE_MAPPINGS) {
-			if(CSL_TYPE_MAPPINGS[zoteroType] == item.type) {
+			if(CSL_TYPE_MAPPINGS[type] == cslItem.type) {
 				zoteroType = type;
 				break;
 			}
@@ -1459,11 +1496,40 @@ Zotero.Utilities = {
 				if(Zotero.ItemFields.isValidForType(fieldID, itemTypeID)) {
 					var date = "";
 					if(cslDate.literal) {
-						date = cslDate.literal;
-					} else if(cslDate.year) {
-						if(cslDate.month) cslDate.month--;
-						date = Zotero.Date.formatDate(cslDate);
-						if(cslDate.season) date = cslDate.season+date;
+						if(variable === "accessed") {
+							date = strToISO(cslDate.literal);
+						} else {
+							date = cslDate.literal;
+						}
+					} else {
+						var newDate = Zotero.Utilities.deepCopy(cslDate);
+						if(cslDate["date-parts"] && typeof cslDate["date-parts"] === "object"
+								&& cslDate["date-parts"] !== null
+								&& typeof cslDate["date-parts"][0] === "object"
+								&& cslDate["date-parts"][0] !== null) {
+							if(cslDate["date-parts"][0][0]) newDate.year = cslDate["date-parts"][0][0];
+							if(cslDate["date-parts"][0][1]) newDate.month = cslDate["date-parts"][0][1];
+							if(cslDate["date-parts"][0][2]) newDate.day = cslDate["date-parts"][0][2];
+						}
+						
+						if(newDate.year) {
+							if(variable === "accessed") {
+								// Need to convert to SQL
+								var date = Zotero.Utilities.lpad(newDate.year, "0", 4);
+								if(newDate.month) {
+									date += "-"+Zotero.Utilities.lpad(newDate.month, "0", 2);
+									if(newDate.day) {
+										date += "-"+Zotero.Utilities.lpad(newDate.day, "0", 2);
+									}
+								}
+							} else {
+								if(newDate.month) newDate.month--;
+								date = Zotero.Date.formatDate(newDate);
+								if(newDate.season) {
+									date = newDate.season+" "+date;
+								}
+							}
+						}
 					}
 					
 					if(isZoteroItem) {
@@ -1550,5 +1616,16 @@ Zotero.Utilities = {
 			}
 		}
 		return length;
+	},
+	
+	/**
+	 * Gets the icon for a JSON-style attachment
+	 */
+	"determineAttachmentIcon":function(attachment) {
+		if(attachment.linkMode === "linked_url") {
+			return Zotero.ItemTypes.getImageSrc("attachment-web-link");
+		}
+		return Zotero.ItemTypes.getImageSrc(attachment.mimeType === "application/pdf"
+							? "attachment-pdf" : "attachment-snapshot");
 	}
 }
