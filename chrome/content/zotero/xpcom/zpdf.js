@@ -24,9 +24,6 @@
 */
 
 Zotero.PDF = new function(){
-	Components.utils.import("resource://gre/modules/Services.jsm");
-	Components.utils.import("resource://zotero/q.jsm");
-	
 	var _pdfjsWindow;
 	
 	/**

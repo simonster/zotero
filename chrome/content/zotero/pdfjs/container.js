@@ -56,7 +56,10 @@ window.addEventListener("message", function(event) {
 					pdf.getPage(i+1).then(function(page) {
 						page.getTextContent().then(function(textContent) {
 							try {
-								contents[i] = textContent;
+								var mapping = textContent.mapping;
+								for(var i=1; i<mapping.length; i++) {
+									contents.push(textContent.text.substring(mapping[i-1], mapping[i]));
+								}
 								if(++retrieved === nPages) {
 									respond({
 										"text":contents.join("\n"),

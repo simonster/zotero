@@ -819,8 +819,6 @@ Zotero.Translate.Base.prototype = {
 	"getPromise":function(type) {
 		var deferred = Q.defer();
 		this.setHandler(type, function() {
-			Zotero.debug("handler called");
-			Zotero.debug(Array.prototype.slice.call(arguments, 1));
 			deferred.resolve(Array.prototype.slice.call(arguments, 1));
 		});
 		return deferred.promise;

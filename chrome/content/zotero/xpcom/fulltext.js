@@ -24,9 +24,6 @@
 */
 
 Zotero.Fulltext = new function(){
-	Components.utils.import("resource://gre/modules/Services.jsm");
-	Components.utils.import("resource://zotero/q.jsm");
-	
 	const FULLTEXT_VERSION = 1;
 	const CACHE_FILE = '.zotero-ft-cache';
 	
