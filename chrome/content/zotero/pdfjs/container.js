@@ -49,20 +49,20 @@ window.addEventListener("message", function(event) {
 		PDFJS.getDocument(message.pdf).then(function(pdf) {
 			try {
 				var retrieved = 0;
-				var contents = [];
+				var contents = "";
 				var nPages = maxPages ? Math.min(maxPages, pdf.numPages) : pdf.numPages;
 				for(var j=0; j<nPages; j++) {
 					let i = j;
 					pdf.getPage(i+1).then(function(page) {
 						page.getTextContent().then(function(textContent) {
 							try {
-								var mapping = textContent.mapping;
-								for(var i=1; i<mapping.length; i++) {
-									contents.push(textContent.text.substring(mapping[i-1], mapping[i]));
+								var bidiTexts = textContent.bidiTexts;
+								for(var i=0; i<bidiTexts.length; i++) {
+									contents += bidiTexts[i].str;
 								}
 								if(++retrieved === nPages) {
 									respond({
-										"text":contents.join("\n"),
+										"text":contents,
 										"pagesConverted":nPages,
 										"pagesTotal":pdf.numPages
 									});
