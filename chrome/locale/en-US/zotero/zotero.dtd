@@ -91,7 +91,7 @@
 
 <!ENTITY zotero.toolbar.newItem.label					"New Item">
 <!ENTITY zotero.toolbar.moreItemTypes.label			"More">
-<!ENTITY zotero.toolbar.newItemFromPage.label			"Create New Item from Current Page">
+<!ENTITY zotero.toolbar.newItemFromPage.label			"Create Web Page Item from Current Page">
 <!ENTITY zotero.toolbar.lookup.label				"Add Item by Identifier">
 <!ENTITY zotero.toolbar.removeItem.label				"Remove Item…">
 <!ENTITY zotero.toolbar.newCollection.label			"New Collection…">
@@ -146,9 +146,11 @@
 <!ENTITY zotero.selectitems.cancel.label				"Cancel">
 <!ENTITY zotero.selectitems.select.label				"OK">
 
-<!ENTITY zotero.bibliography.title						"Create Bibliography">
+<!ENTITY zotero.bibliography.title						"Create Citation/Bibliography">
 <!ENTITY zotero.bibliography.style.label				"Citation Style:">
-<!ENTITY zotero.bibliography.output.label				"Output Format">
+<!ENTITY zotero.bibliography.outputMode				"Output Mode:">
+<!ENTITY zotero.bibliography.bibliography				"Bibliography">
+<!ENTITY zotero.bibliography.outputMethod				"Output Method:">
 <!ENTITY zotero.bibliography.saveAsRTF.label			"Save as RTF">
 <!ENTITY zotero.bibliography.saveAsHTML.label			"Save as HTML">
 <!ENTITY zotero.bibliography.copyToClipboard.label		"Copy to Clipboard">

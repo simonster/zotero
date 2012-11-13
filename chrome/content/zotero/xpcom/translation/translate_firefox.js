@@ -35,6 +35,7 @@ const BOMs = {
 }
 
 Components.utils.import("resource://gre/modules/NetUtil.jsm");
+Components.utils.import("resource://gre/modules/Services.jsm");
 
 Zotero.Translate.DOMWrapper = new function() {	
 	/*
@@ -56,7 +57,13 @@ Zotero.Translate.DOMWrapper = new function() {
 	};
 	
 	function isXrayWrapper(x) {
-		return /XrayWrapper/.exec(x.toString());
+		try {
+			return x.toString().indexOf("XrayWrapper") !== -1;
+		} catch(e) {
+			// The toString() implementation could theoretically throw. But it never
+			// throws for Xray, so we can just assume non-xray in that case.
+			return false;
+		}
 	}
 	
 	// We can't call apply() directy on Xray-wrapped functions, so we have to be
@@ -134,6 +141,26 @@ Zotero.Translate.DOMWrapper = new function() {
 			return crawlProtoChain(Object.getPrototypeOf(obj), fn);
 	};
 	
+	/*
+	 * We want to waive the __exposedProps__ security check for SpecialPowers-wrapped
+	 * objects. We do this by creating a proxy singleton that just always returns 'rw'
+	 * for any property name.
+	 */
+	function ExposedPropsWaiverHandler() {
+		// NB: XPConnect denies access if the relevant member of __exposedProps__ is not
+		// enumerable.
+		var _permit = { value: 'rw', writable: false, configurable: false, enumerable: true };
+		return {
+			getOwnPropertyDescriptor: function(name) { return _permit; },
+			getPropertyDescriptor: function(name) { return _permit; },
+			getOwnPropertyNames: function() { throw Error("Can't enumerate ExposedPropsWaiver"); },
+			getPropertyNames: function() { throw Error("Can't enumerate ExposedPropsWaiver"); },
+			enumerate: function() { throw Error("Can't enumerate ExposedPropsWaiver"); },
+			defineProperty: function(name) { throw Error("Can't define props on ExposedPropsWaiver"); },
+			delete: function(name) { throw Error("Can't delete props from ExposedPropsWaiver"); }
+		};
+	};
+	ExposedPropsWaiver = Proxy.create(ExposedPropsWaiverHandler());
 	
 	function SpecialPowersHandler(obj, overrides) {
 		this.wrappedObject = obj;
@@ -147,6 +174,9 @@ Zotero.Translate.DOMWrapper = new function() {
 		// Handle our special API.
 		if (name == "SpecialPowers_wrappedObject")
 			return { value: this.wrappedObject, writeable: false, configurable: false, enumerable: false };
+		// Handle __exposedProps__.
+		if (name == "__exposedProps__")
+			return { value: ExposedPropsWaiver, writable: false, configurable: false, enumerable: false };
 	
 		// In general, we want Xray wrappers for content DOM objects, because waiving
 		// Xray gives us Xray waiver wrappers that clamp the principal when we cross
@@ -240,10 +270,12 @@ Zotero.Translate.DOMWrapper = new function() {
 	};
 	
 	SpecialPowersHandler.prototype.getOwnPropertyDescriptor = function(name) {
+		Zotero.debug("Getting own property desc "+name);
 		return this.doGetPropertyDescriptor(name, true);
 	};
 	
 	SpecialPowersHandler.prototype.getPropertyDescriptor = function(name) {
+		Zotero.debug("Getting property desc "+name);
 		return this.doGetPropertyDescriptor(name, false);
 	};
 	
@@ -311,14 +343,13 @@ Zotero.Translate.DOMWrapper = new function() {
 		var filt = function(name) { return t.getPropertyDescriptor(name).enumerable; };
 		return this.getPropertyNames().filter(filt);
 	};
+
 	/*
 	 * END SPECIAL POWERS WRAPPING CODE
 	 */
 	
 	/**
-	 * Abstracts DOM wrapper support for avoiding XOWs<br/>
-	 * In Firefox 3.6, we use FX36DOMWrapper, defined below<br/>
-	 * In Firefox 4+, we use some proxy code taken from Special Powers
+	 * Abstracts DOM wrapper support for avoiding XOWs
 	 * @param {XPCCrossOriginWrapper} obj
 	 * @return {Object} An obj that is no longer Xrayed
 	 */
@@ -355,13 +386,6 @@ Zotero.Translate.DOMWrapper = new function() {
  * @param {Zotero.Translate} translate
  * @param {String|window} sandboxLocation
  */
-
-
-/**
- * @class Manages the translator sandbox
- * @param {Zotero.Translate} translate
- * @param {String|window} sandboxLocation
- */
 Zotero.Translate.SandboxManager = function(sandboxLocation) {
 	this.sandbox = new Components.utils.Sandbox(sandboxLocation);
 	this.sandbox.Zotero = {};
@@ -375,17 +399,17 @@ Zotero.Translate.SandboxManager = function(sandboxLocation) {
 		this.sandbox.DOMParser = "wrappedJSObject" in sandboxLocation
 			? sandboxLocation.wrappedJSObject.DOMParser : sandboxLocation.DOMParser;
 	} else {
+		var sandbox = this.sandbox;
 		this.sandbox.DOMParser = function() {
 			var uri, principal;
 			// get URI
-			// DEBUG: In Fx 4 we can just use document.nodePrincipal, but in Fx 3.6 this doesn't work
 			if(typeof sandboxLocation === "string") {	// if sandbox specified by URI
-				// if sandbox specified by URI, get codebase principal from security manager
 				var secMan = Services.scriptSecurityManager;
-				principal = (secMan.getCodebasePrincipal || secMan.getSimpleCodebasePrincipal)
-					(Services.io.newURI(sandboxLocation, "UTF-8", null));
+				uri = Services.io.newURI(sandboxLocation, "UTF-8", null);
+				principal = (secMan.getCodebasePrincipal || secMan.getSimpleCodebasePrincipal)(uri);
 			} else {									// if sandbox specified by DOM document
-				uri = sandboxLocation.document.nodePrincipal;
+				principal = sandboxLocation.document.nodePrincipal;
+				uri = sandboxLocation.document.documentURIObject;
 			}
 			
 			// initialize DOM parser
@@ -395,15 +419,11 @@ Zotero.Translate.SandboxManager = function(sandboxLocation) {
 			
 			// expose parseFromString
 			this.__exposedProps__ = {"parseFromString":"r"};
-			if(Zotero.isFx5) {
-				this.parseFromString = function(str, contentType) {
-					return Zotero.Translate.DOMWrapper.wrap(_DOMParser.parseFromString(str, contentType));
-				}
-			} else {
-				this.parseFromString = function(str, contentType) _DOMParser.parseFromString(str, contentType);
+			this.parseFromString = function(str, contentType) {
+				return Zotero.Translate.DOMWrapper.wrap(_DOMParser.parseFromString(str, contentType));
 			}
-		}
-	};
+		};
+	}
 	this.sandbox.DOMParser.__exposedProps__ = {"prototype":"r"};
 	this.sandbox.DOMParser.prototype = {};
 	this.sandbox.XMLSerializer = function() {
@@ -434,7 +454,9 @@ Zotero.Translate.SandboxManager.prototype = {
 	 */
 	"importObject":function(object, passAsFirstArgument, attachTo) {
 		if(!attachTo) attachTo = this.sandbox.Zotero;
-		var newExposedProps = false;
+		var newExposedProps = false,
+			sandbox = this.sandbox,
+			me = this;
 		if(!object.__exposedProps__) newExposedProps = {};
 		for(var key in (newExposedProps ? object : object.__exposedProps__)) {
 			let localKey = key;
@@ -445,11 +467,11 @@ Zotero.Translate.SandboxManager.prototype = {
 			var isObject = typeof object[localKey] === "object";
 			if(isFunction || isObject) {
 				if(isFunction) {
-					if(passAsFirstArgument) {
-						attachTo[localKey] = object[localKey].bind(object, passAsFirstArgument);
-					} else {
-						attachTo[localKey] = object[localKey].bind(object);
-					}
+					attachTo[localKey] = function() {
+						var args = Array.prototype.slice.apply(arguments);
+						if(passAsFirstArgument) args.unshift(passAsFirstArgument);
+						return me._copyObject(object[localKey].apply(object, args));
+					};
 				} else {
 					attachTo[localKey] = {};
 				}
@@ -468,6 +490,38 @@ Zotero.Translate.SandboxManager.prototype = {
 		} else {
 			attachTo.__exposedProps__ = object.__exposedProps__;
 		}
+	},
+	
+	/**
+	 * Copies a JavaScript object to this sandbox
+	 * @param {Object} obj
+	 * @return {Object}
+	 */
+	"_copyObject":function(obj, wm) {
+		if(typeof obj !== "object" || obj === null
+				|| (obj.__proto__ !== Object.prototype && obj.__proto__ !== Array.prototype)
+				|| "__exposedProps__" in obj || "__wrappedDOMObject" in obj) {
+			return obj;
+		}
+		if(!wm) wm = new WeakMap();
+		var obj2 = (obj instanceof Array ? this.sandbox.Array() : this.sandbox.Object());
+		for(var i in obj) {
+			if(!obj.hasOwnProperty(i)) continue;
+			
+			var prop1 = obj[i];
+			if(typeof prop1 === "object" && prop1 !== null
+					&& (prop1.__proto__ === Object.prototype || prop1.__proto__ === Array.prototype)) {
+				var prop2 = wm.get(prop1);
+				if(prop2 === undefined) {
+					prop2 = this._copyObject(prop1, wm);
+					wm.set(prop1, prop2);
+				}
+				obj2[i] = prop2;
+			} else {
+				obj2[i] = prop1;
+			}
+		}
+		return obj2;
 	}
 }
 

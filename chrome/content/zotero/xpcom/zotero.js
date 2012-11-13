@@ -35,7 +35,7 @@ const ZOTERO_CONFIG = {
 	API_URL: 'https://api.zotero.org/',
 	PREF_BRANCH: 'extensions.zotero.',
 	BOOKMARKLET_URL: 'https://www.zotero.org/bookmarklet/',
-	VERSION: "3.0.8.SOURCE"
+	VERSION: "3.0.9.SOURCE"
 };
 
 // Commonly used imports accessible anywhere
@@ -332,7 +332,7 @@ Components.utils.import("resource://gre/modules/Services.jsm");
 						Zotero.getString('dataDir.previousDir') + ' '
 							+ Zotero.Prefs.get('lastDataDir'),
 						buttonFlags, null,
-						Zotero.getString('dataDir.useProfileDir'),
+						Zotero.getString('dataDir.useProfileDir', Zotero.appName),
 						Zotero.getString('general.locate'),
 						null, {});
 					
@@ -1253,6 +1253,10 @@ Components.utils.import("resource://gre/modules/Services.jsm");
 	 */
 	this.getInstalledExtensions = function(callback) {
 		function onHaveInstalledAddons(installed) {
+			installed.sort(function(a, b) {
+				return ((a.appDisabled || a.userDisabled) ? 1 : 0) -
+					((b.appDisabled || b.userDisabled) ? 1 : 0);
+			});
 			var addons = [];
 			for each(var addon in installed) {
 				switch (addon.id) {
@@ -1262,7 +1266,9 @@ Components.utils.import("resource://gre/modules/Services.jsm");
 				}
 				
 				addons.push(addon.name + " (" + addon.version
-					+ (addon.type != 2 ? ", " + addon.type : "") + ")");
+					+ (addon.type != 2 ? ", " + addon.type : "")
+					+ ((addon.appDisabled || addon.userDisabled) ? ", disabled" : "")
+					+ ")");
 			}
 			callback(addons);
 		}
@@ -2418,6 +2424,8 @@ Zotero.DragDrop = {
  * Functions for creating and destroying hidden browser objects
  **/
 Zotero.Browser = new function() {
+	var nBrowsers = 0;
+	
 	this.createHiddenBrowser = createHiddenBrowser;
 	this.deleteHiddenBrowser = deleteHiddenBrowser;
 	
@@ -2445,17 +2453,20 @@ Zotero.Browser = new function() {
 		hiddenBrowser.docShell.allowJavascript = true;
 		hiddenBrowser.docShell.allowMetaRedirects = false;
 		hiddenBrowser.docShell.allowPlugins = false;
-		Zotero.debug("created hidden browser ("
-			+ (win.document.getElementsByTagName('browser').length - 1) + ")");
+		Zotero.debug("Created hidden browser (" + (nBrowsers++) + ")");
 		return hiddenBrowser;
 	}
 	
-	function deleteHiddenBrowser(myBrowser) {
-		myBrowser.stop();
-		myBrowser.destroy();
-		myBrowser.parentNode.removeChild(myBrowser);
-		myBrowser = null;
-		Zotero.debug("deleted hidden browser");
+	function deleteHiddenBrowser(myBrowsers) {
+		if(!(myBrowsers instanceof Array)) myBrowsers = [myBrowsers];
+		for(var i=0; i<myBrowsers.length; i++) {
+			var myBrowser = myBrowsers[i];
+			myBrowser.stop();
+			myBrowser.destroy();
+			myBrowser.parentNode.removeChild(myBrowser);
+			myBrowser = null;
+			Zotero.debug("Deleted hidden browser (" + (--nBrowsers) + ")");
+		}
 	}
 }
 

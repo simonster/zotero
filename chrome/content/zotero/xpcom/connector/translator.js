@@ -57,14 +57,21 @@ Zotero.Translators = new function() {
 		_initialized = true;
 		
 		// Build caches
-		for(var i in translators) {
-			var translator = new Zotero.Translator(translators[i]);
-			_translators[translator.translatorID] = translator;
-			
-			for(var type in TRANSLATOR_TYPES) {
-				if(translator.translatorType & TRANSLATOR_TYPES[type]) {
-					_cache[type].push(translator);
+		for(var i=0; i<translators.length; i++) {
+			try {
+				var translator = new Zotero.Translator(translators[i]);
+				_translators[translator.translatorID] = translator;
+				
+				for(var type in TRANSLATOR_TYPES) {
+					if(translator.translatorType & TRANSLATOR_TYPES[type]) {
+						_cache[type].push(translator);
+					}
 				}
+			} catch(e) {
+				Zotero.logError(e);
+				try {
+					Zotero.logError("Could not load translator "+JSON.stringify(translators[i]));
+				} catch(e) {}
 			}
 		}
 		
@@ -158,7 +165,10 @@ Zotero.Translators = new function() {
 		var properHosts = [];
 		var proxyHosts = [];
 		if(m) {
-			var hostnames = m[2].split(".");
+			// First, drop the 0- if it exists (this is an III invention)
+			var host = m[2];
+			if(host.substr(0, 2) === "0-") host = host.substr(2);
+			var hostnames = host.split(".");
 			for(var i=1; i<hostnames.length-2; i++) {
 				if(TLDS[hostnames[i].toLowerCase()]) {
 					var properHost = hostnames.slice(0, i+1).join(".");
@@ -265,7 +275,6 @@ Zotero.Translators = new function() {
 						// check whether newTranslator is actually newer than the existing
 						// translator, and if not, don't update
 						if(Zotero.Date.sqlToDate(newTranslator.lastUpdated) < Zotero.Date.sqlToDate(oldTranslator.lastUpdated)) {
-							Zotero.debug("Translators: Received older version of "+newTranslator.label+" from repo ("+newTranslator.lastUpdated+" vs. "+oldTranslator.lastUpdated+")");
 							continue;
 						}
 						
@@ -295,7 +304,8 @@ Zotero.Translators = new function() {
 		
 		// Store
 		if(Zotero.isChrome || Zotero.isSafari) {
-			localStorage["translatorMetadata"] = JSON.stringify(serializedTranslators);
+			var serialized = JSON.stringify(serializedTranslators);
+			Zotero.debug("Translators: Saved updated translator list ("+localStorage["translatorMetadata"].length+" characters)");
 		}
 		
 		// Reinitialize
@@ -412,7 +422,7 @@ Zotero.Translator.prototype.init = function(info) {
 	
 	if(this.browserSupport.indexOf(Zotero.browser) !== -1) {
 		this.runMode = Zotero.Translator.RUN_MODE_IN_BROWSER;
-	} else if(!Zotero.isServer) {
+	} else {
 		this.runMode = Zotero.Translator.RUN_MODE_ZOTERO_STANDALONE;
 	}
 	

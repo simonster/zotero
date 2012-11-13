@@ -379,7 +379,7 @@ Zotero.Schema = new function(){
 		var enumerator = wm.getEnumerator("navigator:browser");
 		while (enumerator.hasMoreElements()) {
 			var win = enumerator.getNext();
-			win.ZoteroPane.buildItemTypeMenus();
+			win.ZoteroPane.buildItemTypeSubMenu();
 			win.document.getElementById('zotero-editpane-item-box').buildItemTypeMenu();
 		}
 	}
@@ -752,7 +752,9 @@ Zotero.Schema = new function(){
 						}
 					}
 					
-					var fileName = Zotero.File.getValidFileName(entry.label) + fileExt;
+					var fileName = Zotero.Translators.getFileNameFromLabel(
+						entry.label, translatorID
+					);
 					
 					var destFile = destDir.clone();
 					destFile.append(fileName);
@@ -876,7 +878,9 @@ Zotero.Schema = new function(){
 				}
 				
 				if (mode == 'translator') {
-					var fileName = Zotero.File.getValidFileName(newObj[titleField]) + fileExt
+					var fileName = Zotero.Translators.getFileNameFromLabel(
+						newObj[titleField], newObj.translatorID
+					);
 				}
 				else if (mode == 'style') {
 					var fileName = file.leafName;

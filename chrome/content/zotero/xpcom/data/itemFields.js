@@ -307,6 +307,7 @@ Zotero.ItemFields = new function() {
 		
 		var autoCompleteFields = [
 			'journalAbbreviation',
+			'series',
 			'seriesTitle',
 			'seriesText',
 			'libraryCatalog',
@@ -314,6 +315,7 @@ Zotero.ItemFields = new function() {
 			'archive',
 			'archiveLocation',
 			'language',
+			'programmingLanguage',
 			'rights',
 			
 			// TEMP - NSF

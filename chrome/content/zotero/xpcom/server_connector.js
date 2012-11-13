@@ -129,7 +129,7 @@ Zotero.Server.Connector.Detect.prototype = {
 	 * @param {Object} data POST data or GET query string
 	 * @param {Function} sendResponseCallback function to send HTTP response
 	 */
-	"init":function(data, sendResponseCallback) {
+	"init":function(url, data, sendResponseCallback) {
 		this.sendResponse = sendResponseCallback;
 		this._parsedPostData = data;
 		
@@ -146,7 +146,7 @@ Zotero.Server.Connector.Detect.prototype = {
 		var pageShowCalled = false;
 		var me = this;
 		this._translate.setCookieSandbox(new Zotero.CookieSandbox(this._browser,
-			this._parsedPostData["uri"], this._parsedPostData["cookie"]));
+			this._parsedPostData["uri"], this._parsedPostData["cookie"], url.userAgent));
 		this._browser.addEventListener("DOMContentLoaded", function() {
 			try {
 				if(me._browser.contentDocument.location.href == "about:blank") return;
@@ -322,7 +322,7 @@ Zotero.Server.Connector.SaveItem.prototype = {
 	 * @param {Object} data POST data or GET query string
 	 * @param {Function} sendResponseCallback function to send HTTP response
 	 */
-	"init":function(data, sendResponseCallback) {
+	"init":function(url, data, sendResponseCallback) {
 		// figure out where to save
 		var libraryID = null;
 		var collectionID = null;
@@ -332,8 +332,8 @@ Zotero.Server.Connector.SaveItem.prototype = {
 			var collection = zp.getSelectedCollection();
 		} catch(e) {}
 		
-		var cookieSandbox = data["uri"] && data["cookie"] ? new Zotero.CookieSandbox(null, data["uri"],
-			data["cookie"]) : null;
+		var cookieSandbox = data["uri"] ? new Zotero.CookieSandbox(null, data["uri"],
+			data["cookie"] || "", url.userAgent) : null;
 		for(var i=0; i<data.items.length; i++) {
 			Zotero.Server.Connector.AttachmentProgressManager.add(data.items[i].attachments);
 		}
@@ -383,65 +383,53 @@ Zotero.Server.Connector.SaveSnapshot.prototype = {
 	 * @param {String} data POST data or GET query string
 	 * @param {Function} sendResponseCallback function to send HTTP response
 	 */
-	"init":function(data, sendResponseCallback) {
+	"init":function(url, data, sendResponseCallback) {
 		Zotero.Server.Connector.Data[data["url"]] = "<html>"+data["html"]+"</html>";
-		var browser = Zotero.Browser.createHiddenBrowser();
-		
-		var pageShowCalled = false;
-		var cookieSandbox = new Zotero.CookieSandbox(browser, data["url"], data["cookie"]);
-		browser.addEventListener("pageshow", function() {
-			if(browser.contentDocument.location.href == "about:blank"
-				|| browser.contentDocument.readyState !== "complete") return;
-			if(pageShowCalled) return;
-			pageShowCalled = true;
-			delete Zotero.Server.Connector.Data[data["url"]];
-			
-			// figure out where to save
-			var libraryID = null;
-			var collectionID = null;
-			var zp = Zotero.getActiveZoteroPane();
-			try {
-				var libraryID = zp.getSelectedLibraryID();
-				var collection = zp.getSelectedCollection();
-			} catch(e) {}
-			
-			try {
-				var doc = browser.contentDocument;
+		Zotero.HTTP.processDocuments(["zotero://connector/"+encodeURIComponent(data["url"])],
+			function(doc) {
+				delete Zotero.Server.Connector.Data[data["url"]];
 				
-				// create new webpage item
-				var item = new Zotero.Item("webpage");
-				item.libraryID = libraryID;
-				item.setField("title", doc.title);
-				item.setField("url", data.url);
-				item.setField("accessDate", "CURRENT_TIMESTAMP");
-				var itemID = item.save();
-				if(collection) collection.addItem(itemID);
+				// figure out where to save
+				var libraryID = null;
+				var collectionID = null;
+				var zp = Zotero.getActiveZoteroPane();
+				try {
+					var libraryID = zp.getSelectedLibraryID();
+					var collection = zp.getSelectedCollection();
+				} catch(e) {}
 				
-				// determine whether snapshot can be saved
-				var filesEditable;
-				if (libraryID) {
-					var group = Zotero.Groups.getByLibraryID(libraryID);
-					filesEditable = group.filesEditable;
-				} else {
-					filesEditable = true;
+				try {
+					// create new webpage item
+					var item = new Zotero.Item("webpage");
+					item.libraryID = libraryID;
+					item.setField("title", doc.title);
+					item.setField("url", data.url);
+					item.setField("accessDate", "CURRENT_TIMESTAMP");
+					var itemID = item.save();
+					if(collection) collection.addItem(itemID);
+					
+					// determine whether snapshot can be saved
+					var filesEditable;
+					if (libraryID) {
+						var group = Zotero.Groups.getByLibraryID(libraryID);
+						filesEditable = group.filesEditable;
+					} else {
+						filesEditable = true;
+					}
+					
+					// save snapshot
+					if(filesEditable) {
+						Zotero.Attachments.importFromDocument(doc, itemID);
+					}
+					
+					sendResponseCallback(201);
+				} catch(e) {
+					sendResponseCallback(500);
+					throw e;
 				}
-				
-				// save snapshot
-				if(filesEditable) {
-					Zotero.Attachments.importFromDocument(doc, itemID);
-				}
-				
-				// remove browser
-				Zotero.Browser.deleteHiddenBrowser(browser);
-				
-				sendResponseCallback(201);
-			} catch(e) {
-				sendResponseCallback(500);
-				throw e;
-			}
-		}, false);
-		
-		browser.loadURI("zotero://connector/"+encodeURIComponent(data["url"]));
+			},
+			null, null, false,
+			new Zotero.CookieSandbox(null, data["url"], data["cookie"], url.userAgent));
 	}
 }
 
@@ -637,7 +625,7 @@ Zotero.Server.Connector.IEHack.prototype = {
 	"init":function(postData, sendResponseCallback) {
 		sendResponseCallback(200, "text/html",
 			'<!DOCTYPE html><html><head>'+
-			'<script src="https://www.zotero.org/bookmarklet/ie_compat.js"></script>'+
+			'<script src="https://www.zotero.org/bookmarklet/common_ie.js"></script>'+
 			'<script src="https://www.zotero.org/bookmarklet/ie_hack.js"></script>'+
 			'</head><body></body></html>');
 	}
